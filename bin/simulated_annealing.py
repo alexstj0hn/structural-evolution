@@ -312,7 +312,10 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
 
 if __name__ == '__main__':
     import argparse
+    import cProfile
+    import pstats
 
+    # Set up the argument parser.
     parser = argparse.ArgumentParser(
         description='Score sequences based on a given structure.'
     )
@@ -330,6 +333,23 @@ if __name__ == '__main__':
         help='Optional JSON file containing mutation options.',
         default=None
     )
+    parser.add_argument(
+        '--n_steps', type=int,
+        help='Number of simulated annealing steps.',
+        default=1000
+    )
 
     args = parser.parse_args()
-    main(args.pdb_file, args.chain, n_steps=1000, mutation_json_path=args.mutation_json)
+
+    # Initialise the profiler.
+    profiler = cProfile.Profile()
+    profiler.enable()  # Begin profiling.
+
+    # Run the main function.
+    main(args.pdb_file, args.chain, n_steps=args.n_steps, mutation_json_path=args.mutation_json)
+
+    profiler.disable()  # End profiling.
+
+    # Create a Stats object and print the top results sorted by cumulative time.
+    stats = pstats.Stats(profiler).sort_stats('cumtime')
+    stats.print_stats()
