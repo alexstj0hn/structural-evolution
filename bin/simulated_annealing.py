@@ -1,24 +1,18 @@
 import esm
-from tqdm import tqdm
+from tqdm import tqdm, trange
 import warnings
 from multichain_util import extract_coords_from_complex, score_sequence_in_complex
 from util import load_structure
 import pandas as pd
 from recommend import get_model_checkpoint_path
 import numpy as np
-from tqdm import tqdm
 import torch 
 from util import CoordBatchConverter
-<<<<<<< HEAD
-
-one_letter_code = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
-=======
 import json  # To load and process the mutation options JSON file
 
 # Standard one-letter codes for the 20 amino acids.
 one_letter_code = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
                    'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
->>>>>>> 3ed5e5f (update_sa)
 
 
 def simulate_annealing_batch(
@@ -32,10 +26,6 @@ def simulate_annealing_batch(
     device,
     one_letter_code=None,
     n_steps=1000,
-<<<<<<< HEAD
-    T0=10.0,
-    alpha=0.99,
-=======
     T0=0.10,
     # Parameters for acceptance rate tuning:
     A_low=0.3,
@@ -43,30 +33,10 @@ def simulate_annealing_batch(
     temp_increase_factor=1.05,
     temp_decrease_factor=0.95,
     adjust_every=10,  # Number of steps between temperature adjustments.
->>>>>>> 3ed5e5f (update_sa)
     order=None,
+    mutation_options: dict = None
 ):
     """
-<<<<<<< HEAD
-    Perform simulated annealing (SA) in parallel on `len(initial_seqs)` sequences.
-    
-    - We treat each sequence as an independent SA trajectory.
-    - At iteration k, the temperature T = T0 * alpha^k.
-    - We pick 1 random position for each sequence, mutate it, do a single batch pass.
-    - For each sequence, if the new LL is higher, accept unconditionally; else accept with prob exp((LL_new - LL_old)/T).
-    - Each time a sequence is accepted, we log it in the results.
-
-    Args:
-        initial_seqs: List of starting sequences (strings).
-        n_steps: Number of SA steps
-        T0: Starting temperature
-        alpha: Exponential decay factor for temperature
-        one_letter_code: possible amino acids to mutate to.
-    Returns:
-        results: a DataFrame with columns [seq_idx, step, old_seq, new_seq, old_ll, new_ll, accepted].
-        final_seqs: the final sequences after SA completes.
-        final_lls: final log-likelihoods.
-=======
     Perform simulated annealing with an adaptive temperature schedule.
     
     If a dictionary of mutation options is provided (mapping residue positions to amino acid
@@ -99,37 +69,27 @@ def simulate_annealing_batch(
         df_results (pd.DataFrame): Detailed log of each mutation step.
         final_seqs (List[str]): Final sequences after the SA process.
         final_lls (List[float]): Log-likelihoods for each final sequence.
->>>>>>> 3ed5e5f (update_sa)
     """
     if one_letter_code is None:
         one_letter_code = list("ACDEFGHIKLMNPQRSTVWY")
 
     num_seqs = len(initial_seqs)
-<<<<<<< HEAD
-    # Evaluate initial log-likelihoods
-=======
 
     # 1) Evaluate initial log-likelihoods for each sequence.
->>>>>>> 3ed5e5f (update_sa)
     ll_complex_list, ll_targetchain_list = score_sequence_in_complex(
-        model, alphabet, coords, native_seqs, target_chain_id,
-        initial_seqs, batch_converter, device, order=order
+        model=model,
+        alphabet=alphabet,
+        coords=coords,
+        native_seqs=native_seqs,
+        target_chain_id=target_chain_id,
+        target_seq_list=initial_seqs,
+        batch_converter=batch_converter,
+        device=device,
+        order=order
     )
-
-    # We'll track the LL for each sequence as we go
     current_lls = np.array(ll_targetchain_list, dtype=np.float32)
-    # Also track sequences in a list
     current_seqs = list(initial_seqs)
 
-<<<<<<< HEAD
-    # We’ll store acceptance info in a list of dicts (then convert to DataFrame).
-    results_records = []
-
-    for step in range(n_steps):
-        T = T0 * (alpha ** step)
-
-        # 1) pick one random position in each sequence, mutate it
-=======
     # Logging structure for results.
     results_records = []
 
@@ -144,16 +104,11 @@ def simulate_annealing_batch(
     for step in pbar:
 
         # 1) Propose new sequences.
->>>>>>> 3ed5e5f (update_sa)
         proposed_seqs = []
         mutated_positions = []
         mutated_residues = []
-
         for i in range(num_seqs):
             seq_list = list(current_seqs[i])
-<<<<<<< HEAD
-            pos = np.random.randint(0, len(seq_list))
-=======
             
             if mutation_options is not None:
                 # Restrict mutations to positions specified in mutation_options.
@@ -172,20 +127,13 @@ def simulate_annealing_batch(
                 pos = np.random.randint(0, len(seq_list))
                 new_aa = np.random.choice(one_letter_code)
             
->>>>>>> 3ed5e5f (update_sa)
             old_aa = seq_list[pos]
-            new_aa = np.random.choice(one_letter_code)
             seq_list[pos] = new_aa
+
             proposed_seqs.append(''.join(seq_list))
             mutated_positions.append(pos)
             mutated_residues.append((old_aa, new_aa))
 
-<<<<<<< HEAD
-        # 2) score the new sequences in a batch
-        ll_complex_list_new, ll_targetchain_list_new = score_sequence_in_complex(
-            model, alphabet, coords, native_seqs, target_chain_id,
-            proposed_seqs, batch_converter, device, order=order
-=======
         # 2) Score the proposed sequences in a single batch.
         ll_complex_new, ll_targetchain_new = score_sequence_in_complex(
             model=model,
@@ -197,38 +145,26 @@ def simulate_annealing_batch(
             batch_converter=batch_converter,
             device=device,
             order=order
->>>>>>> 3ed5e5f (update_sa)
         )
+        new_lls = np.array(ll_targetchain_new, dtype=np.float32)
 
-<<<<<<< HEAD
-        new_lls = np.array(ll_targetchain_list_new, dtype=np.float32)
-
-        # 3) Accept/reject each new seq
-=======
         # 3) Accept or reject each new sequence (Metropolis criterion).
         accepted_count_step = 0
->>>>>>> 3ed5e5f (update_sa)
         for i in range(num_seqs):
             old_seq = current_seqs[i]
             new_seq = proposed_seqs[i]
             old_ll = current_lls[i]
             new_ll = new_lls[i]
-
             delta_ll = new_ll - old_ll
 
-<<<<<<< HEAD
-            # Accept with prob 1 if better, else exp(delta_ll / T)
-=======
->>>>>>> 3ed5e5f (update_sa)
             if (delta_ll > 0) or (np.random.rand() < np.exp(delta_ll / T)):
                 accepted = True
                 current_seqs[i] = new_seq
                 current_lls[i] = new_ll
+                accepted_count_step += 1
             else:
                 accepted = False
 
-            # Log an entry if accepted or not. You might choose only to log accepted, 
-            # but let's log everything for clarity.
             results_records.append({
                 'seq_idx': i,
                 'step': step,
@@ -240,13 +176,10 @@ def simulate_annealing_batch(
                 'old_ll': float(old_ll),
                 'new_ll': float(new_ll),
                 'delta_ll': float(delta_ll),
-                'temp': T,
+                'temp': float(T),
                 'accepted': accepted
             })
 
-<<<<<<< HEAD
-    # 4) Return final sequences & LLs
-=======
         accept_count_window += accepted_count_step
         proposal_count_window += num_seqs
 
@@ -270,18 +203,9 @@ def simulate_annealing_batch(
         else:
             pbar.set_description(f"SA Step {step} | {accepted_count_step}/{num_seqs} accepted | T={T:.3f}")
 
->>>>>>> 3ed5e5f (update_sa)
     final_seqs = current_seqs
     final_lls = current_lls.tolist()
-
     df_results = pd.DataFrame(results_records)
-<<<<<<< HEAD
-    return df_results, final_seqs, final_lls
-
-def main(pdb_file, chain, n_steps=1000):
-    # 1) Load model & alphabet
-    model_checkpoint_path = 'esm_if1_20220410.pt'
-=======
 
     print("Simulated Annealing complete. Final sequences:")
     for i, (seq, ll_val) in enumerate(zip(final_seqs, final_lls)):
@@ -314,31 +238,12 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
     """
     # 1) Load the protein model and alphabet.
     model_checkpoint_path = get_model_checkpoint_path('esm_if1_20220410.pt')
->>>>>>> 3ed5e5f (update_sa)
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', UserWarning)
-        model, alphabet = esm.pretrained.load_model_and_alphabet(
-            model_checkpoint_path
-        )
+        model, alphabet = esm.pretrained.load_model_and_alphabet(model_checkpoint_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.eval().to(device)
 
-<<<<<<< HEAD
-    # 2) Create batch converter once
-    batch_converter = CoordBatchConverter(alphabet)
-
-    # 3) Load structure
-    structure = load_structure(pdb_file)
-    coords, native_seqs = extract_coords_from_complex(structure)
-
-    # For example, define some initial sequences (wildtype or random).
-    # Let's say we do SA on a batch of 5 sequences, each is just the wildtype for now:
-    target_chain_id = chain
-    wt_seq = native_seqs[target_chain_id]
-    initial_seqs = [wt_seq]*5  # 5 copies of wildtype (or vary them if you like)
-
-    # 4) Run Simulated Annealing
-=======
     # 2) Create the batch converter.
     batch_converter = CoordBatchConverter(alphabet)
 
@@ -368,7 +273,6 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
         print(f"Loaded mutation options for chain {target_chain_id} from {mutation_json_path}")
 
     # 6) Run simulated annealing.
->>>>>>> 3ed5e5f (update_sa)
     df_results, final_seqs, final_lls = simulate_annealing_batch(
         model=model,
         alphabet=alphabet,
@@ -378,23 +282,12 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
         initial_seqs=initial_seqs,
         batch_converter=batch_converter,
         device=device,
-<<<<<<< HEAD
-        n_steps=n_steps,  # you can tune
-        T0=10.0,          # initial temperature, tune
-        alpha=0.99        # decay factor, tune
-    )
-
-    # 5) Save the results
-=======
         n_steps=100,
         mutation_options=mutation_options
     )
 
     # 7) Save the results.
->>>>>>> 3ed5e5f (update_sa)
     df_results.to_csv("simulated_annealing_log.csv", index=False)
-    # final_seqs: your final solutions after SA
-    # final_lls: the final log-likelihood for each sequence
     final_results_df = pd.DataFrame({
         "seq_idx": range(len(final_seqs)),
         "final_sequence": final_seqs,
@@ -406,7 +299,6 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
 
 
 if __name__ == '__main__':
-
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -414,13 +306,10 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--pdb_file', type=str,
-        help='input filepath, either .pdb or .cif',
+        help='Input filepath (either .pdb or .cif).'
     )
     parser.add_argument(
         '--chain', type=str,
-<<<<<<< HEAD
-        help='chain id for the chain of interest', default='A',
-=======
         help='Chain identifier for the chain of interest.',
         default='A'
     )
@@ -428,8 +317,7 @@ if __name__ == '__main__':
         '--mutation_json', type=str,
         help='Optional JSON file containing mutation options.',
         default=None
->>>>>>> 3ed5e5f (update_sa)
     )
 
     args = parser.parse_args()
-    main(args.pdb_file, args.chain)
+    main(args.pdb_file, args.chain, n_steps=1000, mutation_json_path=args.mutation_json)
