@@ -256,6 +256,18 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
     wt_seq = native_seqs[target_chain_id]
     initial_seqs = [wt_seq] * 5
 
+    # 4.1) Evaluate initial log-likelihood for the wildtype sequence.
+    ll_complex_wt, ll_targetchain_wt = score_sequence_in_complex(
+        model=model,
+        alphabet=alphabet,
+        coords=coords,
+        native_seqs=native_seqs,
+        target_chain_id=target_chain_id,
+        target_seq_list=[wt_seq],
+        batch_converter=batch_converter,
+        device=device,
+    )
+    
     # 5) Load and process the mutation options JSON file if provided.
     mutation_options = None
     if mutation_json_path is not None:
@@ -282,7 +294,7 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
         initial_seqs=initial_seqs,
         batch_converter=batch_converter,
         device=device,
-        n_steps=100,
+        n_steps=n_steps,
         mutation_options=mutation_options
     )
 
