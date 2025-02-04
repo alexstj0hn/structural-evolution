@@ -294,7 +294,11 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None, n_init=8):
     # 4) Prepare initial sequences. Here we use n_init copies of the wildtype sequence.
     target_chain_id = chain
     wt_seq = native_seqs[target_chain_id]
+<<<<<<< HEAD
     initial_seqs = [wt_seq] * n_init
+=======
+    initial_seqs = [wt_seq] * 16
+>>>>>>> 4edbf1c460dad3cbe95306d5065142517646bad1
 
     # 4.1) Evaluate initial log-likelihood for the wildtype sequence (for reference).
     ll_complex_wt, ll_targetchain_wt = score_sequence_in_complex(
@@ -385,4 +389,8 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
+<<<<<<< HEAD
     main(args.pdb_file, args.chain, n_steps=args.n_steps, mutation_json_path=args.mutation_json, n_init=args.n_init)
+=======
+    main(args.pdb_file, args.chain, n_steps=args.n_steps, mutation_json_path=args.mutation_json)
+>>>>>>> 4edbf1c460dad3cbe95306d5065142517646bad1
