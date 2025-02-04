@@ -147,56 +147,57 @@ def sample_sequence_in_complex(model, coords, target_chain_id, temperature=1.,
 
 #*
 def score_sequence_in_complex(
-        model,
-        alphabet,
-        coords,
-        native_seqs,
-        target_chain_id,
-        target_seq,
-        padding_length=10,
-        order=None,
+    model,
+    alphabet,
+    coords,
+    native_seqs,
+    target_chain_id,
+    target_seq_list,
+    batch_converter,
+    device,
+    order=None
 ):
     """
-    Scores sequence for one chain in a complex.
-    Args:
-        model: An instance of the GVPTransformer model
-        alphabet: Alphabet for the model
-        coords: Dictionary mapping chain ids to L x 3 x 3 array for N, CA, C
-            coordinates representing the backbone of each chain
-        native_seqs: Dictionary mapping chain ids to sequence
-                extracted from each chain
-        target_chain_id: The chain id to sample sequences for
-        target_seq: Target sequence for the target chain for scoring.
-        padding_length: padding length in between chains
-    Returns:
-        Tuple (ll_fullseq, ll_withcoord)
-        - ll_fullseq: Average log-likelihood over the full target chain
-        - ll_targetseq Average log-likelihood in target chain excluding those
-            residues without coordinates
+    For each sequence in target_seq_list, merges coordinates + seq for the entire complex,
+    then does a single forward pass on the batch.
+    Returns (ll_fullseq_list, ll_targetseq_list) each of shape [batch_size].
     """
+    import numpy as np
 
-    assert(len(target_seq) == len(native_seqs[target_chain_id]))
+    all_coords_list = []
+    all_seq_list = []
+    coords_chains_list = []
 
-    all_coords, coords_chains = _concatenate_coords(
-        coords,
-        target_chain_id,
-        order=order,
+    for seq in target_seq_list:
+        merged_coords, merged_chains = _concatenate_coords(
+            coords, target_chain_id, order=order
+        )
+        merged_seq = _concatenate_seqs(
+            native_seqs, seq, target_chain_id, order=order
+        )
+        all_coords_list.append(merged_coords)
+        all_seq_list.append(merged_seq)
+        coords_chains_list.append(merged_chains)
+
+    loss_array, pad_mask_array = get_sequence_loss(
+        model, all_coords_list, all_seq_list, batch_converter, device, alphabet
     )
-    all_seqs = _concatenate_seqs(
-        native_seqs,
-        target_seq,
-        target_chain_id,
-        order=order,
-    )
+    # shape: [batch_size, L]
 
-    loss, target_padding_mask = get_sequence_loss(model, alphabet, all_coords,
-            all_seqs)
-    assert(all_coords.shape[0] == coords_chains.shape[0] == loss.shape[0])
+    ll_fullseq_list = []
+    ll_targetseq_list = []
 
-    ll_fullseq = -np.mean(loss[coords_chains != 'pad'])
-    ll_targetseq = -np.mean(loss[coords_chains == target_chain_id])
+    for i in range(len(all_seq_list)):
+        # Identify chain positions
+        coords_chains = coords_chains_list[i]  # e.g. shape [L]
+        loss_i = loss_array[i]
+        # Negative average log-likelihood
+        ll_full = -np.mean(loss_i[coords_chains != 'pad'])
+        ll_target = -np.mean(loss_i[coords_chains == target_chain_id])
+        ll_fullseq_list.append(ll_full)
+        ll_targetseq_list.append(ll_target)
 
-    return ll_fullseq, ll_targetseq
+    return ll_fullseq_list, ll_targetseq_list
 
 
 def get_encoder_output_for_complex(model, alphabet, coords, target_chain_id):

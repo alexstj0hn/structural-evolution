@@ -98,21 +98,43 @@ def get_atom_coords_residuewise(atoms: List[str], struct: biotite.structure.Atom
     return biotite.structure.apply_residue_wise(struct, struct, filterfn)
 
 #* now consistent with updated gpu
-def get_sequence_loss(model, alphabet, coords, seq):
-    device = next(model.parameters()).device
-    batch_converter = CoordBatchConverter(alphabet)
-    batch = [(coords, None, seq)]
-    coords, confidence, strs, tokens, padding_mask = batch_converter(
-        batch, device=device)
+def get_sequence_loss(
+    model,
+    coords_list,
+    seq_list,
+    batch_converter,
+    device,
+    alphabet
+):
+    """
+    Batches multiple (coords, seq) pairs and returns per-token cross-entropy.
 
-    prev_output_tokens = tokens[:, :-1].to(device)
-    target = tokens[:, 1:]
-    target_padding_mask = (target == alphabet.padding_idx)
-    logits, _ = model.forward(coords, padding_mask, confidence, prev_output_tokens)
-    loss = F.cross_entropy(logits, target, reduction='none')
-    loss = loss[0].cpu().detach().numpy()
-    target_padding_mask = target_padding_mask[0].cpu().numpy()
-    return loss, target_padding_mask
+    coords_list: [coords_1, coords_2, ...]
+    seq_list: [seq_1, seq_2, ...]
+
+    Returns:
+        loss_array: shape [batch_size, L]
+        pad_mask_array: shape [batch_size, L]
+    """
+    assert len(coords_list) == len(seq_list)
+
+    with torch.inference_mode():
+        batch_data = [(coords_list[i], None, seq_list[i]) for i in range(len(seq_list))]
+        coords_t, confidence, _, tokens, padding_mask = batch_converter(
+            batch_data, device=device
+        )
+        prev_output_tokens = tokens[:, :-1]
+        targets = tokens[:, 1:]
+        target_padding_mask = (targets == alphabet.padding_idx)
+
+        logits, _ = model(coords_t, padding_mask, confidence, prev_output_tokens)
+        loss = F.cross_entropy(logits, targets, reduction='none')
+        # shape: [batch_size, seq_length]
+
+    loss_array = loss.detach().cpu().numpy()
+    pad_mask_array = target_padding_mask.detach().cpu().numpy()
+    return loss_array, pad_mask_array
+
 
 
 def score_sequence(model, alphabet, coords, seq):
