@@ -6,7 +6,7 @@ from util import load_structure
 import pandas as pd
 from recommend import get_model_checkpoint_path
 import numpy as np
-import torch 
+import torch
 from util import CoordBatchConverter
 import json  # To load and process the mutation options JSON file
 
@@ -15,7 +15,7 @@ one_letter_code = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
                    'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
 
 
-def simulate_annealing_batch(
+def simulate_annealing_batch_two_phase(
     model,
     alphabet,
     coords,
@@ -26,23 +26,33 @@ def simulate_annealing_batch(
     device,
     one_letter_code=None,
     n_steps=1000,
-    T0=0.10,
-    # Parameters for acceptance rate tuning:
+    T0=0.010,
+    # Adaptive-phase acceptance tuning parameters:
     A_low=0.3,
     A_high=0.6,
     temp_increase_factor=1.05,
     temp_decrease_factor=0.95,
-    adjust_every=10,  # Number of steps between temperature adjustments.
+    adjust_every=10,  # Frequency of temperature adjustments in the adaptive phase.
+    # Classical-phase monotonic cooling parameters:
+    classical_decrease_factor=0.99,
     order=None,
     mutation_options: dict = None
 ):
     """
-    Perform simulated annealing with an adaptive temperature schedule.
-    
+    Perform two-phase simulated annealing:
+      (1) An adaptive phase (acceptance-rate-based temperature adjustments).
+      (2) A classical phase with a monotonically decreasing temperature schedule.
+
+    By default, n_steps is evenly split between the adaptive and classical phases,
+    with no acceptance-based temperature tuning after the initial adaptive phase.
+
     If a dictionary of mutation options is provided (mapping residue positions to amino acid
     frequency dictionaries), mutations are restricted to the specified positions with the new amino acid
     chosen according to the provided weights. Otherwise, mutations are proposed at random positions
     and the new amino acid is selected uniformly from the provided alphabet.
+
+    References:
+        - Kirkpatrick, S. et al. “Optimization by Simulated Annealing.” (Science, 1983).
     
     Args:
         model: The protein model.
@@ -55,16 +65,17 @@ def simulate_annealing_batch(
         device: Computation device (e.g. "cuda" or "cpu").
         one_letter_code (List[str], optional): One-letter codes for amino acids.
         n_steps (int): Total number of simulated annealing steps.
-        T0 (float): Initial temperature.
-        A_low (float): Lower bound for the acceptance rate.
-        A_high (float): Upper bound for the acceptance rate.
-        temp_increase_factor (float): Multiplicative factor to increase T when acceptance is low.
-        temp_decrease_factor (float): Multiplicative factor to decrease T when acceptance is high.
-        adjust_every (int): Frequency (in steps) at which to adjust the temperature.
+        T0 (float): Initial temperature for the adaptive phase.
+        A_low (float): Lower bound for the acceptance rate in the adaptive phase.
+        A_high (float): Upper bound for the acceptance rate in the adaptive phase.
+        temp_increase_factor (float): Factor to increase T when acceptance is low (adaptive phase).
+        temp_decrease_factor (float): Factor to decrease T when acceptance is high (adaptive phase).
+        adjust_every (int): Frequency (in steps) for acceptance-based T adjustments in the adaptive phase.
+        classical_decrease_factor (float): Monotonic decrease factor in the classical phase.
         order: Optional parameter for score_sequence_in_complex.
         mutation_options (dict, optional): A dictionary mapping residue positions (0-indexed)
             to dictionaries of amino acid weights.
-    
+
     Returns:
         df_results (pd.DataFrame): Detailed log of each mutation step.
         final_seqs (List[str]): Final sequences after the SA process.
@@ -87,20 +98,26 @@ def simulate_annealing_batch(
         device=device,
         order=order
     )
-    current_lls = np.array(ll_targetchain_list, dtype=np.float32)
+    current_lls = np.array(ll_complex_list, dtype=np.float32)
     current_seqs = list(initial_seqs)
 
     # Logging structure for results.
     results_records = []
 
+    # Split the total steps between adaptive and classical phases.
+    adaptive_steps = n_steps // 2
+    classical_steps = n_steps - adaptive_steps
+
     # Initialise temperature.
     T = T0
 
-    # For tracking acceptance rate.
+    # For tracking acceptance rate in the adaptive phase.
     accept_count_window = 0
     proposal_count_window = 0
 
-    pbar = trange(n_steps, desc="Simulated Annealing (Adaptive)", leave=True)
+    # We will run a single loop from 0..n_steps, but with different update rules.
+    pbar = trange(n_steps, desc="Simulated Annealing (Two-Phase)", leave=True)
+    accepts = []
     for step in pbar:
 
         # 1) Propose new sequences.
@@ -146,7 +163,7 @@ def simulate_annealing_batch(
             device=device,
             order=order
         )
-        new_lls = np.array(ll_targetchain_new, dtype=np.float32)
+        new_lls = np.array(ll_complex_new, dtype=np.float32)
 
         # 3) Accept or reject each new sequence (Metropolis criterion).
         accepted_count_step = 0
@@ -180,28 +197,49 @@ def simulate_annealing_batch(
                 'accepted': accepted
             })
 
-        accept_count_window += accepted_count_step
-        proposal_count_window += num_seqs
+        # =====================
+        # Phase 1: Adaptive
+        # =====================
+        if step < adaptive_steps:
+            accept_count_window += accepted_count_step
+            proposal_count_window += num_seqs
 
-        # Adjust the temperature every 'adjust_every' steps.
-        if (step + 1) % adjust_every == 0:
-            acceptance_rate = accept_count_window / float(proposal_count_window)
-            if acceptance_rate > A_high:
-                T *= temp_decrease_factor
-                pbar.write(f"High acceptance rate ({acceptance_rate:.2f}); decreasing T to {T:.3f}")
-            elif acceptance_rate < A_low:
-                T *= temp_increase_factor
-                pbar.write(f"Low acceptance rate ({acceptance_rate:.2f}); increasing T to {T:.3f}")
-            else:
-                pbar.write(f"Acceptance rate {acceptance_rate:.2f} within bounds; T remains {T:.3f}")
+            # Adjust the temperature every 'adjust_every' steps during the adaptive phase.
+            if (step + 1) % adjust_every == 0:
+                acceptance_rate = accept_count_window / float(proposal_count_window)
+                if acceptance_rate > A_high:
+                    T *= temp_decrease_factor
+                    pbar.write(f"[Adaptive] High acceptance rate ({acceptance_rate:.2f}); decreasing T to {T:.3f}")
+                elif acceptance_rate < A_low:
+                    T *= temp_increase_factor
+                    pbar.write(f"[Adaptive] Low acceptance rate ({acceptance_rate:.2f}); increasing T to {T:.3f}")
+                else:
+                    pbar.write(f"[Adaptive] Acceptance rate {acceptance_rate:.2f} within bounds; T remains {T:.3f}")
 
-            accept_count_window = 0
-            proposal_count_window = 0
+                accept_count_window = 0
+                proposal_count_window = 0
 
-        if accepted_count_step == 0:
-            pbar.set_description(f"SA Step {step} | No accepts | T={T:.3f}")
+        # =====================
+        # Phase 2: Classical (monotonically decreasing)
+        # =====================
         else:
-            pbar.set_description(f"SA Step {step} | {accepted_count_step}/{num_seqs} accepted | T={T:.3f}")
+            # Once we enter the classical phase, we do not adapt T based on acceptance.
+            # Instead we simply apply a monotonic cooling schedule each step.
+            T *= classical_decrease_factor
+
+        if np.sum(accepts) == 0:
+            recent_accepts = 0
+        elif len(accepts) < 100:
+            recent_accepts = 100*(np.sum(accepts)/len(accepts))
+        else:
+            recent_accepts = np.sum(accepts[-100:])
+
+        accepts.extend(([1] * accepted_count_step) + ([0] * (num_seqs - accepted_count_step)))
+        
+        if accepted_count_step == 0:
+            pbar.set_description(f"SA Step {step} | {recent_accepts:.1f}% accepted in last 100 steps | 0/{num_seqs} accepted | T={T:.8f} | current mean ll {np.mean(current_lls):.5f}")
+        else:
+            pbar.set_description(f"SA Step {step} | {recent_accepts:.1f}% accepted in last 100 steps | {accepted_count_step}/{num_seqs} accepted | T={T:.8f} | current mean ll {np.mean(current_lls):.5f}")
 
     final_seqs = current_seqs
     final_lls = current_lls.tolist()
@@ -214,9 +252,10 @@ def simulate_annealing_batch(
     return df_results, final_seqs, final_lls
 
 
-def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
+def main(pdb_file, chain, n_steps=100, mutation_json_path=None, n_init=8):
     """
-    Main function to load the model, structure and mutation options, and then initiate simulated annealing.
+    Main function to load the model, structure and mutation options, and then initiate
+    a two-phase simulated annealing approach.
     
     The mutation JSON file is expected to have the following nested structure:
     
@@ -232,11 +271,12 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
     Args:
         pdb_file (str): Filepath to the input structure (.pdb or .cif).
         chain (str): Chain identifier for the chain of interest.
-        n_steps (int): Number of simulated annealing steps.
+        n_steps (int): Number of total SA steps (divided between adaptive and classical phases).
         mutation_json_path (str, optional): Filepath to the JSON file containing mutation options.
-    
+        n_init (int): Number of initial starting sequences.
     """
     # 1) Load the protein model and alphabet.
+    print('Loading model')
     model_checkpoint_path = get_model_checkpoint_path('esm_if1_20220410.pt')
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', UserWarning)
@@ -251,12 +291,12 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
     structure = load_structure(pdb_file)
     coords, native_seqs = extract_coords_from_complex(structure)
 
-    # 4) Prepare initial sequences. Here we use 5 copies of the wildtype sequence.
+    # 4) Prepare initial sequences. Here we use n_init copies of the wildtype sequence.
     target_chain_id = chain
     wt_seq = native_seqs[target_chain_id]
-    initial_seqs = [wt_seq] * 16
+    initial_seqs = [wt_seq] * n_init
 
-    # 4.1) Evaluate initial log-likelihood for the wildtype sequence.
+    # 4.1) Evaluate initial log-likelihood for the wildtype sequence (for reference).
     ll_complex_wt, ll_targetchain_wt = score_sequence_in_complex(
         model=model,
         alphabet=alphabet,
@@ -267,7 +307,9 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
         batch_converter=batch_converter,
         device=device,
     )
-    
+    print(f"WT LL (complex): {ll_complex_wt[0]:.4f}")
+
+    print('Running two-phase SA...')
     # 5) Load and process the mutation options JSON file if provided.
     mutation_options = None
     if mutation_json_path is not None:
@@ -284,8 +326,8 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
                 mutation_options[pos] = freq
         print(f"Loaded mutation options for chain {target_chain_id} from {mutation_json_path}")
 
-    # 6) Run simulated annealing.
-    df_results, final_seqs, final_lls = simulate_annealing_batch(
+    # 6) Run the two-phase simulated annealing.
+    df_results, final_seqs, final_lls = simulate_annealing_batch_two_phase(
         model=model,
         alphabet=alphabet,
         coords=coords,
@@ -312,12 +354,10 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
 
 if __name__ == '__main__':
     import argparse
-    import cProfile
-    import pstats
 
     # Set up the argument parser.
     parser = argparse.ArgumentParser(
-        description='Score sequences based on a given structure.'
+        description='Two-phase simulated annealing for protein sequences.'
     )
     parser.add_argument(
         '--pdb_file', type=str,
@@ -335,10 +375,14 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--n_steps', type=int,
-        help='Number of simulated annealing steps.',
+        help='Total number of simulated annealing steps (both phases).',
         default=1000
     )
-
+    parser.add_argument(
+        '--n_init', type=int,
+        help='Number of initial starting points.',
+        default=8
+    )
     args = parser.parse_args()
 
-    main(args.pdb_file, args.chain, n_steps=args.n_steps, mutation_json_path=args.mutation_json)
+    main(args.pdb_file, args.chain, n_steps=args.n_steps, mutation_json_path=args.mutation_json, n_init=args.n_init)
