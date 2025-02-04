@@ -254,7 +254,7 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
     # 4) Prepare initial sequences. Here we use 5 copies of the wildtype sequence.
     target_chain_id = chain
     wt_seq = native_seqs[target_chain_id]
-    initial_seqs = [wt_seq] * 5
+    initial_seqs = [wt_seq] * 16
 
     # 4.1) Evaluate initial log-likelihood for the wildtype sequence.
     ll_complex_wt, ll_targetchain_wt = score_sequence_in_complex(
@@ -312,8 +312,6 @@ def main(pdb_file, chain, n_steps=100, mutation_json_path=None):
 
 if __name__ == '__main__':
     import argparse
-    import cProfile
-    import pstats
 
     # Set up the argument parser.
     parser = argparse.ArgumentParser(
@@ -341,15 +339,4 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # Initialise the profiler.
-    profiler = cProfile.Profile()
-    profiler.enable()  # Begin profiling.
-
-    # Run the main function.
     main(args.pdb_file, args.chain, n_steps=args.n_steps, mutation_json_path=args.mutation_json)
-
-    profiler.disable()  # End profiling.
-
-    # Create a Stats object and print the top results sorted by cumulative time.
-    stats = pstats.Stats(profiler).sort_stats('cumtime')
-    stats.print_stats()
